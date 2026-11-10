@@ -1,0 +1,82 @@
+// Copyright (c) ONNX Project Contributors
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// Adapter for all ops that remove consumed_inputs
+
+#pragma once
+
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "onnx/version_converter/adapters/adapter.h"
+
+namespace ONNX_NAMESPACE::version_conversion {
+
+class AxesInputToAttribute : public Adapter {
+ public:
+  explicit AxesInputToAttribute(const std::string& op_name, const OpSetID& initial, const OpSetID& target)
+      : Adapter(op_name, initial, target) {}
+
+  Node* adapt(std::shared_ptr<Graph> graph, Node* node) const override {
+    moveAxesToAttribute(graph, node);
+    // Reductions in the target opset have no noop_with_empty_axes: without axes they reduce
+    // over all dimensions, which only matches noop_with_empty_axes=0.
+    const Symbol knoop_with_empty_axes("noop_with_empty_axes");
+    if (node->hasAttribute(knoop_with_empty_axes)) {
+      ONNX_ASSERTM(
+          node->i(knoop_with_empty_axes) == 0 || (node->hasAttribute(kaxes) && !node->is(kaxes).empty()),
+          node->kind().toString(),
+          " with noop_with_empty_axes=1 and no axes is an identity, which the target opset can't express")
+      node->removeAttribute(knoop_with_empty_axes);
+    }
+    return node;
+  }
+
+ private:
+  void moveAxesToAttribute(const std::shared_ptr<Graph>& graph, Node* node) const {
+    // Identify if axes is statically determined; if so, feed as attribute
+    const ArrayRef<Value*>& inputs = node->inputs();
+    // Check if axes input is provided (it's optional)
+    if (inputs.size() <= 1) {
+      // No axes input provided, nothing to convert
+      return;
+    }
+    if (inputs[1]->node()->kind() == kUndefined) {
+      node->removeInput(1);
+      return;
+    }
+    // Get axes from initializer or constant operator
+    // Identify whether we have a Constant Op or an Initializer
+    Value* const_val = inputs[1];
+    Node* node_ptr = const_val->node();
+    if (node_ptr->kind() == kConstant) {
+      node->is_(kaxes, ReadInt64Tensor(node_ptr->t(kvalue)));
+      // If Constant node isn't used anywhere else, remove it
+      node->removeInput(1);
+      if (const_val->uses().empty()) {
+        node_ptr->destroy();
+      }
+    } else {
+      ONNX_ASSERTM(
+          graph->is_constant_initializer(const_val),
+          "Axes input must be constant; dynamic inputs and overridable initializers cannot be converted to attributes.")
+      // Get Value name, find Initializer with same name
+      for (const auto& initializer : graph->initializers()) {
+        if (initializer.name() == inputs[1]->uniqueName()) {
+          node->is_(kaxes, ReadInt64Tensor(initializer));
+          node->removeInput(1);
+          // Remove initializer
+          if (const_val->uses().empty())
+            graph->eraseInitializerAndInput(const_val);
+          break;
+        }
+      }
+    }
+    ONNX_ASSERTM(node->hasAttribute(kaxes), "No initializer or constant input to node found")
+  }
+};
+
+} // namespace ONNX_NAMESPACE::version_conversion
