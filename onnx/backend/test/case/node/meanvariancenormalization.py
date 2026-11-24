@@ -1,0 +1,95 @@
+# Copyright (c) ONNX Project Contributors
+#
+# SPDX-License-Identifier: Apache-2.0
+from __future__ import annotations
+
+import numpy as np
+
+import onnx
+from onnx.backend.test.case.base import Base
+from onnx.backend.test.case.node import expect
+
+
+class MeanVarianceNormalization(Base):
+    @staticmethod
+    def export() -> None:
+        node = onnx.helper.make_node(
+            "MeanVarianceNormalization", inputs=["X"], outputs=["Y"]
+        )
+
+        input_data = np.array(
+            [
+                [
+                    [[0.8439683], [0.5665144], [0.05836735]],
+                    [[0.02916367], [0.12964272], [0.5060197]],
+                    [[0.79538304], [0.9411346], [0.9546573]],
+                ],
+                [
+                    [[0.17730942], [0.46192095], [0.26480448]],
+                    [[0.6746842], [0.01665257], [0.62473077]],
+                    [[0.9240844], [0.9722341], [0.11965699]],
+                ],
+                [
+                    [[0.41356155], [0.9129373], [0.59330076]],
+                    [[0.81929934], [0.7862604], [0.11799799]],
+                    [[0.69248444], [0.54119414], [0.07513223]],
+                ],
+            ],
+            dtype=np.float32,
+        )
+
+        # Calculate expected output data
+        data_mean = np.mean(input_data, axis=(0, 2, 3), keepdims=1)
+        centered = input_data - data_mean
+        std = np.sqrt(np.mean(np.square(centered), axis=(0, 2, 3), keepdims=True))
+        expected_output = (input_data - data_mean) / (std + 1e-9)
+
+        expect(node, inputs=[input_data], outputs=[expected_output], name="test_mvn")
+
+    @staticmethod
+    def export_epsilon() -> None:
+        epsilon = 1.0
+        node = onnx.helper.make_node(
+            "MeanVarianceNormalization",
+            inputs=["X"],
+            outputs=["Y"],
+            axes=[1, -1],
+            epsilon=epsilon,
+        )
+
+        input_data = np.arange(24, dtype=np.float64).reshape(2, 3, 4)
+
+        # Calculate expected output with custom epsilon
+        data_mean = np.mean(input_data, axis=(1, -1), keepdims=True)
+        centered = input_data - data_mean
+        std = np.sqrt(np.mean(np.square(centered), axis=(1, -1), keepdims=True))
+        expected_output = (input_data - data_mean) / (std + epsilon)
+
+        expect(
+            node,
+            inputs=[input_data],
+            outputs=[expected_output],
+            name="test_mvn_epsilon",
+        )
+
+    @staticmethod
+    def export_zero_variance() -> None:
+        node = onnx.helper.make_node(
+            "MeanVarianceNormalization",
+            inputs=["X"],
+            outputs=["Y"],
+            axes=[0],
+        )
+        input_data = np.ones(2, dtype=np.float32)
+        mean = np.mean(input_data, axis=0, keepdims=True)
+        centered = input_data - mean
+        expected_output = centered / (
+            np.sqrt(np.mean(np.square(centered), axis=0, keepdims=True)) + 1e-9
+        )
+
+        expect(
+            node,
+            inputs=[input_data],
+            outputs=[expected_output],
+            name="test_mvn_zero_variance",
+        )
